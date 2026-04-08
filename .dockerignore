@@ -1,0 +1,4 @@
+# Ignore everything, then whitelist only what the build needs
+*
+!Dockerfile
+!src/docker/runner.py
