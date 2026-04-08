@@ -1,24 +1,48 @@
 import Docker from "dockerode";
 import { PassThrough } from "node:stream";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, basename } from "node:path";
+import type { SandboxConfig } from "./config.js";
 
 const IMAGE_TAG = "re-helper-sandbox:latest";
 const CONTAINER_NAME = "re-helper-sandbox";
 const MAX_OUTPUT_BYTES = 100 * 1024; // 100KB
+const IDLE_CHECK_INTERVAL_MS = 30_000; // Check every 30s
 
 function getProjectRoot(): string {
   const currentFile = fileURLToPath(import.meta.url);
-  // src/docker/sandbox.ts -> project root (2 levels up from src/)
   return join(dirname(currentFile), "..", "..");
 }
 
 export class DockerSandbox {
   private docker: Docker;
   private container: Docker.Container | null = null;
+  private config: SandboxConfig;
+  private lastExecTime: number = 0;
+  private idleTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor() {
+  constructor(config: SandboxConfig) {
     this.docker = new Docker();
+    this.config = config;
+  }
+
+  private startIdleTimer(): void {
+    if (this.idleTimer) return;
+    this.lastExecTime = Date.now();
+    this.idleTimer = setInterval(async () => {
+      if (this.container && Date.now() - this.lastExecTime > this.config.idleTimeoutMs) {
+        console.error("[sandbox] Idle timeout reached, destroying container");
+        await this.destroy().catch(() => {});
+      }
+    }, IDLE_CHECK_INTERVAL_MS);
+    this.idleTimer.unref(); // Don't prevent Node from exiting
+  }
+
+  private stopIdleTimer(): void {
+    if (this.idleTimer) {
+      clearInterval(this.idleTimer);
+      this.idleTimer = null;
+    }
   }
 
   async ensureImage(): Promise<void> {
@@ -34,7 +58,6 @@ export class DockerSandbox {
       { t: IMAGE_TAG },
     );
 
-    // Wait for build to complete
     await new Promise<void>((resolve, reject) => {
       this.docker.modem.followProgress(
         stream,
@@ -48,25 +71,23 @@ export class DockerSandbox {
   }
 
   async ensureContainer(): Promise<void> {
-    // If we have a reference, check if it's still running
     if (this.container) {
       try {
         const info = await this.container.inspect();
         if (info.State.Running) return;
-        // Not running — remove and recreate
         await this.container.remove({ force: true }).catch(() => {});
       } catch {
-        // Container gone, will recreate
+        // Container gone
       }
       this.container = null;
     }
 
-    // Check for an existing container by name
     try {
       const existing = this.docker.getContainer(CONTAINER_NAME);
       const info = await existing.inspect();
       if (info.State.Running) {
         this.container = existing;
+        this.startIdleTimer();
         return;
       }
       await existing.remove({ force: true }).catch(() => {});
@@ -84,23 +105,30 @@ export class DockerSandbox {
       User: "sandbox",
       HostConfig: {
         NetworkMode: "none",
-        Memory: 512 * 1024 * 1024,
-        NanoCpus: 1_000_000_000,
+        Memory: this.config.memoryMb * 1024 * 1024,
+        NanoCpus: this.config.cpus * 1_000_000_000,
         ReadonlyRootfs: true,
         Tmpfs: { "/tmp": "rw,nosuid,size=100m" },
         SecurityOpt: ["no-new-privileges"],
+        PidsLimit: this.config.pidsLimit,
+        CapDrop: ["ALL"],
+        ShmSize: 1024 * 1024, // 1MB
       },
     });
 
     await this.container.start();
+    this.startIdleTimer();
     console.error("[sandbox] Container started");
   }
 
   async exec(
     code: string,
-    timeoutMs: number = 30000,
+    timeoutMs?: number,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     await this.ensureContainer();
+    this.lastExecTime = Date.now();
+
+    const effectiveTimeout = timeoutMs ?? this.config.defaultTimeoutMs;
 
     const exec = await this.container!.exec({
       Cmd: ["python3", "/opt/runner.py"],
@@ -111,8 +139,8 @@ export class DockerSandbox {
 
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new Error(`Execution timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
+        reject(new Error(`Execution timed out after ${effectiveTimeout}ms`));
+      }, effectiveTimeout);
 
       exec.start({ hijack: true, stdin: true }, (err, stream) => {
         if (err || !stream) {
@@ -131,7 +159,6 @@ export class DockerSandbox {
 
         this.docker.modem.demuxStream(stream, stdoutBuf, stderrBuf);
 
-        // Write code to stdin and close
         stream.write(code);
         stream.end();
 
@@ -151,7 +178,7 @@ export class DockerSandbox {
             }
 
             resolve({ stdout, stderr, exitCode });
-          } catch (inspectErr) {
+          } catch {
             resolve({
               stdout: Buffer.concat(stdoutChunks).toString("utf8"),
               stderr: Buffer.concat(stderrChunks).toString("utf8"),
@@ -163,7 +190,60 @@ export class DockerSandbox {
     });
   }
 
+  async writeFile(filename: string, contentBase64: string): Promise<string> {
+    // Validate filename: no path traversal
+    const safe = basename(filename);
+    if (safe !== filename || filename.includes("\0")) {
+      throw new Error("Invalid filename — must be a plain basename with no path separators");
+    }
+
+    await this.ensureContainer();
+    this.lastExecTime = Date.now();
+
+    const destPath = `/tmp/${safe}`;
+
+    const exec = await this.container!.exec({
+      Cmd: ["sh", "-c", `base64 -d > ${destPath}`],
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+
+    return new Promise((resolve, reject) => {
+      exec.start({ hijack: true, stdin: true }, (err, stream) => {
+        if (err || !stream) {
+          reject(err ?? new Error("No stream returned"));
+          return;
+        }
+
+        const stderrBuf = new PassThrough();
+        const stderrChunks: Buffer[] = [];
+        stderrBuf.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+        this.docker.modem.demuxStream(stream, new PassThrough(), stderrBuf);
+
+        stream.write(contentBase64);
+        stream.end();
+
+        stream.on("end", async () => {
+          try {
+            const inspectResult = await exec.inspect();
+            if (inspectResult.ExitCode !== 0) {
+              const stderr = Buffer.concat(stderrChunks).toString("utf8");
+              reject(new Error(`Write failed (exit ${inspectResult.ExitCode}): ${stderr}`));
+            } else {
+              resolve(destPath);
+            }
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    });
+  }
+
   async destroy(): Promise<void> {
+    this.stopIdleTimer();
     if (!this.container) return;
     try {
       await this.container.stop({ t: 2 });

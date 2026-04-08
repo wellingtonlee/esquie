@@ -116,6 +116,13 @@ Native TypeScript tools — no Docker overhead, instant response.
 
 All hex parameters accept optional `0x` prefix and ignore whitespace.
 
+### Sandbox Management
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `reset_sandbox` | *(none)* | Destroy the container and clear all session state. Next `python_eval` starts fresh. |
+| `upload_to_sandbox` | `filename`, `content_base64` | Upload a file (base64-encoded) into `/tmp/<filename>` inside the container. Useful for dropping binaries or samples for Python analysis. |
+
 ### Scratchpad
 
 In-memory key-value store for persisting analysis notes, renamed symbols, struct definitions, and other context across a session.
@@ -138,12 +145,16 @@ The `python_eval` container runs with multiple layers of isolation:
 | `NetworkMode: "none"` | No network access — cannot exfiltrate data or download payloads |
 | `Memory: 512MB` | Hard memory limit prevents runaway allocations |
 | `NanoCpus: 1e9` | Capped at 1 CPU core |
+| `PidsLimit: 64` | Prevents fork bombs |
+| `CapDrop: ALL` | All Linux capabilities dropped — zero effective/permitted/inheritable caps |
+| `ShmSize: 1MB` | Shared memory restricted from default 64MB |
 | `ReadonlyRootfs: true` | Filesystem is immutable — only `/tmp` is writable |
 | `Tmpfs /tmp (100MB)` | Ephemeral writable scratch space, capped at 100MB |
-| `User: sandbox` | Non-root user inside the container |
+| `User: sandbox` | Non-root user (uid 1000) inside the container |
 | `no-new-privileges` | Prevents privilege escalation via setuid/setgid binaries |
 | Per-call timeout | Default 30s, configurable — kills exec on expiry |
 | Output truncation | stdout/stderr capped at 100KB to prevent context flooding |
+| Idle auto-expiry | Container destroyed after 30min of inactivity (configurable) |
 
 ## Architecture
 
@@ -176,7 +187,38 @@ Claude Code / Claude Desktop
 
 - **Lazy init:** Container is created on the first `python_eval` call and kept alive for the session.
 - **Session persistence:** Python variables survive across calls via `dill` serialization to `/tmp/session.pkl` inside the container.
+- **Auto-expiry:** Container is automatically destroyed after 30 minutes of idle time (configurable via `RE_SANDBOX_IDLE_TIMEOUT`).
 - **Cleanup:** Container is stopped and removed on server shutdown (SIGINT/SIGTERM).
+
+## Configuration
+
+Resource limits and timeouts are configured via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RE_SANDBOX_MEMORY` | `512` | Memory limit in MB |
+| `RE_SANDBOX_CPUS` | `1` | CPU core count |
+| `RE_SANDBOX_TIMEOUT` | `30000` | Default exec timeout in ms |
+| `RE_SANDBOX_PIDS` | `64` | PID limit |
+| `RE_SANDBOX_IDLE_TIMEOUT` | `1800000` | Auto-expiry idle timeout in ms (30 min) |
+
+Set them in your MCP config's `env` block or export before starting the server:
+
+```json
+{
+  "mcpServers": {
+    "re-helper-tools": {
+      "command": "node",
+      "args": ["dist/index.js"],
+      "cwd": "/absolute/path/to/re-helper-tools",
+      "env": {
+        "RE_SANDBOX_MEMORY": "1024",
+        "RE_SANDBOX_TIMEOUT": "60000"
+      }
+    }
+  }
+}
+```
 
 ## Development
 
@@ -204,6 +246,7 @@ re-helper-tools/
 ├── src/
 │   ├── index.ts               # Entry point: server setup, tool registration, shutdown
 │   ├── docker/
+│   │   ├── config.ts          # Env var config parsing
 │   │   ├── sandbox.ts         # DockerSandbox class: container lifecycle + exec
 │   │   └── runner.py          # Python runner baked into Docker image
 │   └── tools/
