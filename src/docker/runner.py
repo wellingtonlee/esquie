@@ -20,7 +20,8 @@ def load_session() -> dict:
         import dill
         with open(SESSION_FILE, "rb") as f:
             return dill.load(f)
-    except Exception:
+    except Exception as e:
+        print(f"[warning: session load failed: {type(e).__name__}: {e}]", file=sys.stderr)
         return {}
 
 
@@ -30,8 +31,8 @@ def save_session(ns: dict) -> None:
         save_ns = {k: v for k, v in ns.items() if not k.startswith("__")}
         with open(SESSION_FILE, "wb") as f:
             dill.dump(save_ns, f)
-    except Exception:
-        print("[warning: session state could not be saved]", file=sys.stderr)
+    except Exception as e:
+        print(f"[warning: session save failed: {type(e).__name__}: {e}]", file=sys.stderr)
 
 
 def main() -> None:

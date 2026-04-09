@@ -2,8 +2,25 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 
-function text(s: string) {
-  return { content: [{ type: "text" as const, text: s }] };
+type ToolResult = { content: Array<{ type: "text"; text: string }>; isError?: boolean };
+
+function text(s: string): ToolResult {
+  return { content: [{ type: "text", text: s }] };
+}
+
+function errorResult(e: unknown): ToolResult {
+  const msg = e instanceof Error ? e.message : String(e);
+  return { content: [{ type: "text", text: `Error: ${msg}` }], isError: true };
+}
+
+function safeTool<T>(fn: (args: T) => ToolResult | Promise<ToolResult>): (args: T) => Promise<ToolResult> {
+  return async (args: T) => {
+    try {
+      return await fn(args);
+    } catch (e) {
+      return errorResult(e);
+    }
+  };
 }
 
 function stripPrefix(hex: string): string {
@@ -17,10 +34,10 @@ export function registerHexUtilsTools(server: McpServer): void {
       description: "Convert a hex string to decimal",
       inputSchema: { hex: z.string().describe("Hex value (with or without 0x prefix)") },
     },
-    async ({ hex }) => {
+    safeTool(({ hex }) => {
       const clean = stripPrefix(hex);
       return text(BigInt("0x" + clean).toString(10));
-    },
+    }),
   );
 
   server.registerTool(
@@ -29,9 +46,9 @@ export function registerHexUtilsTools(server: McpServer): void {
       description: "Convert a decimal number to hex",
       inputSchema: { dec: z.string().describe("Decimal value") },
     },
-    async ({ dec }) => {
+    safeTool(({ dec }) => {
       return text(BigInt(dec).toString(16));
-    },
+    }),
   );
 
   server.registerTool(
@@ -40,10 +57,10 @@ export function registerHexUtilsTools(server: McpServer): void {
       description: "Decode a hex string to ASCII text",
       inputSchema: { hex: z.string().describe("Hex-encoded bytes") },
     },
-    async ({ hex }) => {
+    safeTool(({ hex }) => {
       const buf = Buffer.from(stripPrefix(hex), "hex");
       return text(buf.toString("utf8"));
-    },
+    }),
   );
 
   server.registerTool(
@@ -52,9 +69,9 @@ export function registerHexUtilsTools(server: McpServer): void {
       description: "Encode ASCII text as hex bytes",
       inputSchema: { text: z.string().describe("Text to encode") },
     },
-    async ({ text: input }) => {
+    safeTool(({ text: input }) => {
       return text(Buffer.from(input, "utf8").toString("hex"));
-    },
+    }),
   );
 
   server.registerTool(
@@ -66,7 +83,7 @@ export function registerHexUtilsTools(server: McpServer): void {
         hex_b: z.string().describe("Second hex buffer"),
       },
     },
-    async ({ hex_a, hex_b }) => {
+    safeTool(({ hex_a, hex_b }) => {
       const a = Buffer.from(stripPrefix(hex_a), "hex");
       const b = Buffer.from(stripPrefix(hex_b), "hex");
       const len = Math.max(a.length, b.length);
@@ -75,7 +92,7 @@ export function registerHexUtilsTools(server: McpServer): void {
         result[i] = (a[i % a.length] ?? 0) ^ (b[i % b.length] ?? 0);
       }
       return text(result.toString("hex"));
-    },
+    }),
   );
 
   server.registerTool(
@@ -88,14 +105,14 @@ export function registerHexUtilsTools(server: McpServer): void {
         encoding: z.enum(["utf8", "hex"]).default("utf8").describe("Input encoding: utf8 (default) or hex"),
       },
     },
-    async ({ data, algorithm, encoding }) => {
+    safeTool(({ data, algorithm, encoding }) => {
       const buf =
         encoding === "hex"
           ? Buffer.from(stripPrefix(data), "hex")
           : Buffer.from(data, "utf8");
       const digest = createHash(algorithm).update(buf).digest("hex");
       return text(digest);
-    },
+    }),
   );
 
   server.registerTool(
@@ -107,7 +124,7 @@ export function registerHexUtilsTools(server: McpServer): void {
         pattern: z.string().describe("Hex pattern to find, e.g. '4d5a??90'"),
       },
     },
-    async ({ hex_data, pattern }) => {
+    safeTool(({ hex_data, pattern }) => {
       const data = Buffer.from(stripPrefix(hex_data), "hex");
       const patClean = stripPrefix(pattern);
       const patBytes: Array<number | null> = [];
@@ -128,7 +145,7 @@ export function registerHexUtilsTools(server: McpServer): void {
         if (match) offsets.push(i);
       }
       return text(JSON.stringify({ offsets, count: offsets.length }));
-    },
+    }),
   );
 
   server.registerTool(
@@ -140,13 +157,13 @@ export function registerHexUtilsTools(server: McpServer): void {
         encoding: z.enum(["utf8", "hex"]).default("utf8").describe("Input encoding: utf8 (default) or hex"),
       },
     },
-    async ({ data, encoding }) => {
+    safeTool(({ data, encoding }) => {
       const buf =
         encoding === "hex"
           ? Buffer.from(stripPrefix(data), "hex")
           : Buffer.from(data, "utf8");
       return text(buf.toString("base64"));
-    },
+    }),
   );
 
   server.registerTool(
@@ -158,11 +175,11 @@ export function registerHexUtilsTools(server: McpServer): void {
         output_encoding: z.enum(["utf8", "hex"]).default("utf8").describe("Output encoding: utf8 (default) or hex"),
       },
     },
-    async ({ data, output_encoding }) => {
+    safeTool(({ data, output_encoding }) => {
       const buf = Buffer.from(data, "base64");
       return text(
         output_encoding === "hex" ? buf.toString("hex") : buf.toString("utf8"),
       );
-    },
+    }),
   );
 }

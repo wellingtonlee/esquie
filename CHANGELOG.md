@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1 — 2026-04-09
+
+- Input validation on all hex/binary tools — returns clean errors instead of crashing
+- Config bounds checking — clamps RE_SANDBOX_* env vars to valid ranges with warnings
+- Upload size limit (10MB) on `upload_to_sandbox`
+- Improved error diagnostics in sandbox catch blocks and runner.py session save/load
+
 ## 0.2.0 — 2026-04-08
 
 - Security hardening: PidsLimit (64), CapDrop ALL, ShmSize 1MB

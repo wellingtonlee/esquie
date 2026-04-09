@@ -7,6 +7,7 @@ import type { SandboxConfig } from "./config.js";
 const IMAGE_TAG = "re-helper-sandbox:latest";
 const CONTAINER_NAME = "re-helper-sandbox";
 const MAX_OUTPUT_BYTES = 100 * 1024; // 100KB
+const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB
 const IDLE_CHECK_INTERVAL_MS = 30_000; // Check every 30s
 
 function getProjectRoot(): string {
@@ -178,7 +179,8 @@ export class DockerSandbox {
             }
 
             resolve({ stdout, stderr, exitCode });
-          } catch {
+          } catch (inspectErr) {
+            console.error("[sandbox] exec.inspect() failed:", inspectErr);
             resolve({
               stdout: Buffer.concat(stdoutChunks).toString("utf8"),
               stderr: Buffer.concat(stderrChunks).toString("utf8"),
@@ -195,6 +197,14 @@ export class DockerSandbox {
     const safe = basename(filename);
     if (safe !== filename || filename.includes("\0")) {
       throw new Error("Invalid filename — must be a plain basename with no path separators");
+    }
+
+    // Check decoded size (~75% of base64 length)
+    const estimatedBytes = Math.ceil(contentBase64.length * 0.75);
+    if (estimatedBytes > MAX_UPLOAD_BYTES) {
+      throw new Error(
+        `File too large: ~${Math.round(estimatedBytes / 1024 / 1024)}MB exceeds ${MAX_UPLOAD_BYTES / 1024 / 1024}MB limit`,
+      );
     }
 
     await this.ensureContainer();

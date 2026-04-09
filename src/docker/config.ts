@@ -6,7 +6,7 @@ export interface SandboxConfig {
   idleTimeoutMs: number;
 }
 
-function envInt(key: string, fallback: number): number {
+function envIntBounded(key: string, fallback: number, min: number, max: number): number {
   const val = process.env[key];
   if (val === undefined) return fallback;
   const parsed = parseInt(val, 10);
@@ -14,15 +14,23 @@ function envInt(key: string, fallback: number): number {
     console.error(`[config] Invalid ${key}="${val}", using default ${fallback}`);
     return fallback;
   }
+  if (parsed < min) {
+    console.error(`[config] ${key}=${parsed} below minimum ${min}, clamping`);
+    return min;
+  }
+  if (parsed > max) {
+    console.error(`[config] ${key}=${parsed} above maximum ${max}, clamping`);
+    return max;
+  }
   return parsed;
 }
 
 export function loadConfig(): SandboxConfig {
   return {
-    memoryMb: envInt("RE_SANDBOX_MEMORY", 512),
-    cpus: envInt("RE_SANDBOX_CPUS", 1),
-    defaultTimeoutMs: envInt("RE_SANDBOX_TIMEOUT", 30000),
-    pidsLimit: envInt("RE_SANDBOX_PIDS", 64),
-    idleTimeoutMs: envInt("RE_SANDBOX_IDLE_TIMEOUT", 1800000),
+    memoryMb: envIntBounded("RE_SANDBOX_MEMORY", 512, 64, 8192),
+    cpus: envIntBounded("RE_SANDBOX_CPUS", 1, 1, 16),
+    defaultTimeoutMs: envIntBounded("RE_SANDBOX_TIMEOUT", 30000, 1000, 600000),
+    pidsLimit: envIntBounded("RE_SANDBOX_PIDS", 64, 8, 1024),
+    idleTimeoutMs: envIntBounded("RE_SANDBOX_IDLE_TIMEOUT", 1800000, 60000, 86400000),
   };
 }
