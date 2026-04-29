@@ -18,7 +18,7 @@ export function registerPythonEvalTools(
         timeout: z
           .number()
           .optional()
-          .describe("Timeout in milliseconds (default from RE_SANDBOX_TIMEOUT or 30000)"),
+          .describe("Timeout in milliseconds (default from ESQUIE_SANDBOX_TIMEOUT or 30000)"),
       },
     },
     async ({ code, timeout }) => {
@@ -73,6 +73,59 @@ export function registerPythonEvalTools(
         const destPath = await sandbox.writeFile(filename, content_base64);
         return {
           content: [{ type: "text" as const, text: `File written to ${destPath}` }],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    "list_sandbox_files",
+    {
+      description:
+        "List files in the sandbox container's /tmp directory (output of `ls -la /tmp`).",
+    },
+    async () => {
+      try {
+        const output = await sandbox.listFiles();
+        return {
+          content: [{ type: "text" as const, text: output || "(empty)" }],
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          content: [{ type: "text" as const, text: `Error: ${message}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    "download_from_sandbox",
+    {
+      description:
+        "Read a file from the sandbox container's /tmp directory and return its base64-encoded content. " +
+        "Maximum file size: 10MB.",
+      inputSchema: {
+        filename: z.string().describe("Filename (no path separators) — read from /tmp/<filename>"),
+      },
+    },
+    async ({ filename }) => {
+      try {
+        const { contentBase64, size } = await sandbox.readFile(filename);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: JSON.stringify({ filename, size, content_base64: contentBase64 }),
+            },
+          ],
         };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);

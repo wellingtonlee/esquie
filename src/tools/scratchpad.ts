@@ -1,10 +1,52 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 
 const notes = new Map<string, string>();
+const persistFile = process.env.ESQUIE_NOTES_FILE;
+let onChangeCallback: (() => void) | null = null;
 
 function text(s: string) {
   return { content: [{ type: "text" as const, text: s }] };
+}
+
+function hydrate(): void {
+  if (!persistFile || !existsSync(persistFile)) return;
+  try {
+    const raw = readFileSync(persistFile, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    for (const [k, v] of Object.entries(parsed)) notes.set(k, v);
+    console.error(`[scratchpad] Loaded ${notes.size} note(s) from ${persistFile}`);
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(`[scratchpad] Failed to load ${persistFile}: ${msg} — using empty in-memory store`);
+  }
+}
+
+function persist(): void {
+  if (!persistFile) return;
+  try {
+    const tmp = `${persistFile}.tmp`;
+    writeFileSync(tmp, JSON.stringify(Object.fromEntries(notes), null, 2));
+    renameSync(tmp, persistFile);
+  } catch (e) {
+    const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+    console.error(`[scratchpad] Failed to persist to ${persistFile}: ${msg}`);
+  }
+}
+
+hydrate();
+
+export function listNotes(): Map<string, string> {
+  return notes;
+}
+
+export function getNote(key: string): string | undefined {
+  return notes.get(key);
+}
+
+export function onScratchpadChange(cb: () => void): void {
+  onChangeCallback = cb;
 }
 
 export function registerScratchpadTools(server: McpServer): void {
@@ -19,6 +61,8 @@ export function registerScratchpadTools(server: McpServer): void {
     },
     async ({ key, value }) => {
       notes.set(key, value);
+      persist();
+      onChangeCallback?.();
       return text(`Saved note "${key}"`);
     },
   );
@@ -60,6 +104,8 @@ export function registerScratchpadTools(server: McpServer): void {
       if (!notes.delete(key)) {
         return { content: [{ type: "text" as const, text: `Note "${key}" not found` }], isError: true };
       }
+      persist();
+      onChangeCallback?.();
       return text(`Deleted note "${key}"`);
     },
   );

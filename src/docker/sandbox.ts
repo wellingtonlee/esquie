@@ -4,10 +4,11 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, basename } from "node:path";
 import type { SandboxConfig } from "./config.js";
 
-const IMAGE_TAG = "re-helper-sandbox:latest";
-const CONTAINER_NAME = "re-helper-sandbox";
+const IMAGE_TAG = "esquie-sandbox:latest";
+const CONTAINER_NAME = "esquie-sandbox";
 const MAX_OUTPUT_BYTES = 100 * 1024; // 100KB
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_DOWNLOAD_BYTES = 10 * 1024 * 1024; // 10MB
 const IDLE_CHECK_INTERVAL_MS = 30_000; // Check every 30s
 
 function getProjectRoot(): string {
@@ -186,6 +187,113 @@ export class DockerSandbox {
               stderr: Buffer.concat(stderrChunks).toString("utf8"),
               exitCode: 1,
             });
+          }
+        });
+      });
+    });
+  }
+
+  async listFiles(): Promise<string> {
+    await this.ensureContainer();
+    this.lastExecTime = Date.now();
+
+    const exec = await this.container!.exec({
+      Cmd: ["ls", "-la", "/tmp"],
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+
+    return new Promise((resolve, reject) => {
+      exec.start({}, (err, stream) => {
+        if (err || !stream) {
+          reject(err ?? new Error("No stream returned"));
+          return;
+        }
+
+        const stdoutBuf = new PassThrough();
+        const stderrBuf = new PassThrough();
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+
+        stdoutBuf.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+        stderrBuf.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+        this.docker.modem.demuxStream(stream, stdoutBuf, stderrBuf);
+
+        stream.on("end", async () => {
+          try {
+            const inspectResult = await exec.inspect();
+            if (inspectResult.ExitCode !== 0) {
+              const stderr = Buffer.concat(stderrChunks).toString("utf8");
+              reject(new Error(`ls failed (exit ${inspectResult.ExitCode}): ${stderr}`));
+            } else {
+              resolve(Buffer.concat(stdoutChunks).toString("utf8"));
+            }
+          } catch (e) {
+            reject(e);
+          }
+        });
+      });
+    });
+  }
+
+  async readFile(filename: string): Promise<{ contentBase64: string; size: number }> {
+    const safe = basename(filename);
+    if (safe !== filename || filename.includes("\0")) {
+      throw new Error("Invalid filename — must be a plain basename with no path separators");
+    }
+
+    await this.ensureContainer();
+    this.lastExecTime = Date.now();
+
+    const srcPath = `/tmp/${safe}`;
+    const maxBytes = MAX_DOWNLOAD_BYTES;
+
+    const exec = await this.container!.exec({
+      Cmd: [
+        "sh",
+        "-c",
+        `if [ ! -f ${srcPath} ]; then echo "not found" >&2; exit 2; fi; ` +
+          `size=$(stat -c %s ${srcPath}); ` +
+          `if [ "$size" -gt ${maxBytes} ]; then echo "file too large: $size bytes (max ${maxBytes})" >&2; exit 3; fi; ` +
+          `printf "%s\\n" "$size"; base64 ${srcPath}`,
+      ],
+      AttachStdout: true,
+      AttachStderr: true,
+    });
+
+    return new Promise((resolve, reject) => {
+      exec.start({}, (err, stream) => {
+        if (err || !stream) {
+          reject(err ?? new Error("No stream returned"));
+          return;
+        }
+
+        const stdoutBuf = new PassThrough();
+        const stderrBuf = new PassThrough();
+        const stdoutChunks: Buffer[] = [];
+        const stderrChunks: Buffer[] = [];
+
+        stdoutBuf.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+        stderrBuf.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+
+        this.docker.modem.demuxStream(stream, stdoutBuf, stderrBuf);
+
+        stream.on("end", async () => {
+          try {
+            const inspectResult = await exec.inspect();
+            if (inspectResult.ExitCode !== 0) {
+              const stderr = Buffer.concat(stderrChunks).toString("utf8").trim();
+              reject(new Error(`Read failed (exit ${inspectResult.ExitCode}): ${stderr}`));
+              return;
+            }
+            const stdout = Buffer.concat(stdoutChunks).toString("utf8");
+            const newlineIdx = stdout.indexOf("\n");
+            const size = parseInt(stdout.slice(0, newlineIdx), 10);
+            const contentBase64 = stdout.slice(newlineIdx + 1).replace(/\s+/g, "");
+            resolve({ contentBase64, size });
+          } catch (e) {
+            reject(e);
           }
         });
       });

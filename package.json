@@ -1,7 +1,7 @@
 {
-  "name": "re-helper-tools",
-  "version": "0.2.0",
-  "description": "MCP server providing reverse engineering helper tools",
+  "name": "esquie",
+  "version": "0.3.0",
+  "description": "Esquie — MCP server providing reverse engineering helper tools",
   "type": "module",
   "main": "dist/index.js",
   "scripts": {

@@ -27,10 +27,10 @@ function envIntBounded(key: string, fallback: number, min: number, max: number):
 
 export function loadConfig(): SandboxConfig {
   return {
-    memoryMb: envIntBounded("RE_SANDBOX_MEMORY", 512, 64, 8192),
-    cpus: envIntBounded("RE_SANDBOX_CPUS", 1, 1, 16),
-    defaultTimeoutMs: envIntBounded("RE_SANDBOX_TIMEOUT", 30000, 1000, 600000),
-    pidsLimit: envIntBounded("RE_SANDBOX_PIDS", 64, 8, 1024),
-    idleTimeoutMs: envIntBounded("RE_SANDBOX_IDLE_TIMEOUT", 1800000, 60000, 86400000),
+    memoryMb: envIntBounded("ESQUIE_SANDBOX_MEMORY", 512, 64, 8192),
+    cpus: envIntBounded("ESQUIE_SANDBOX_CPUS", 1, 1, 16),
+    defaultTimeoutMs: envIntBounded("ESQUIE_SANDBOX_TIMEOUT", 30000, 1000, 600000),
+    pidsLimit: envIntBounded("ESQUIE_SANDBOX_PIDS", 64, 8, 1024),
+    idleTimeoutMs: envIntBounded("ESQUIE_SANDBOX_IDLE_TIMEOUT", 1800000, 60000, 86400000),
   };
 }

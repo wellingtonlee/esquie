@@ -1,6 +1,8 @@
-# re-helper-tools
+# Esquie
 
 MCP server providing computation, encoding, and note-taking tools for AI-assisted reverse engineering. Designed to complement disassembler-specific MCP servers (IDA Pro, Ghidra, Binary Ninja) by handling the ad-hoc computation side of RE work: struct unpacking, address math, crypto checks, encoding/decoding, and arbitrary Python scripting.
+
+> Renamed from `re-helper-tools` in 0.3.0. Existing users should remove the old image/container: `docker rmi re-helper-sandbox:latest && docker rm -f re-helper-sandbox`.
 
 ## Prerequisites
 
@@ -19,14 +21,14 @@ docker info      # should print server info without errors
 
 ```bash
 # Clone and enter the project
-git clone <repo-url> && cd re-helper-tools
+git clone <repo-url> && cd esquie
 
 # Install dependencies and compile TypeScript
 npm install
 npm run build
 
 # Build the Python sandbox Docker image (~1-2 min on first run)
-docker build -t re-helper-sandbox:latest .
+docker build -t esquie-sandbox:latest .
 ```
 
 > The Docker image is also built automatically on the first `python_eval` call if it doesn't exist, but pre-building avoids a delay during your first session.
@@ -40,10 +42,10 @@ Add to your project's `.mcp.json` or `~/.claude.json` under `mcpServers`:
 ```json
 {
   "mcpServers": {
-    "re-helper-tools": {
+    "esquie": {
       "command": "node",
       "args": ["dist/index.js"],
-      "cwd": "/absolute/path/to/re-helper-tools"
+      "cwd": "/absolute/path/to/esquie"
     }
   }
 }
@@ -58,10 +60,10 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "re-helper-tools": {
+    "esquie": {
       "command": "node",
-      "args": ["/absolute/path/to/re-helper-tools/dist/index.js"],
-      "cwd": "/absolute/path/to/re-helper-tools"
+      "args": ["/absolute/path/to/esquie/dist/index.js"],
+      "cwd": "/absolute/path/to/esquie"
     }
   }
 }
@@ -121,11 +123,13 @@ All hex parameters accept optional `0x` prefix and ignore whitespace.
 | Tool | Parameters | Description |
 |------|-----------|-------------|
 | `reset_sandbox` | *(none)* | Destroy the container and clear all session state. Next `python_eval` starts fresh. |
-| `upload_to_sandbox` | `filename`, `content_base64` | Upload a file (base64-encoded) into `/tmp/<filename>` inside the container. Useful for dropping binaries or samples for Python analysis. |
+| `upload_to_sandbox` | `filename`, `content_base64` | Upload a file (base64-encoded) into `/tmp/<filename>` inside the container. 10MB limit. |
+| `list_sandbox_files` | *(none)* | `ls -la /tmp` inside the container. |
+| `download_from_sandbox` | `filename` | Read `/tmp/<filename>` and return `{filename, size, content_base64}`. 10MB limit. |
 
 ### Scratchpad
 
-In-memory key-value store for persisting analysis notes, renamed symbols, struct definitions, and other context across a session.
+Key-value store for persisting analysis notes, renamed symbols, struct definitions, and other context. By default in-memory only (cleared on server restart). Set `ESQUIE_NOTES_FILE` to an absolute file path to persist notes to disk.
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
@@ -134,7 +138,7 @@ In-memory key-value store for persisting analysis notes, renamed symbols, struct
 | `list_notes` | *(none)* | List all notes as JSON |
 | `delete_note` | `key` | Remove a note |
 
-Notes are stored in server memory and cleared when the MCP server restarts.
+Notes are also exposed as **MCP resources** under `note://{key}` URIs, so MCP clients that support resources can browse and reference them directly.
 
 ## Sandbox Security Model
 
@@ -155,6 +159,7 @@ The `python_eval` container runs with multiple layers of isolation:
 | Per-call timeout | Default 30s, configurable — kills exec on expiry |
 | Output truncation | stdout/stderr capped at 100KB to prevent context flooding |
 | Idle auto-expiry | Container destroyed after 30min of inactivity (configurable) |
+| Upload/download size cap | 10MB per call to bound exfil-via-roundtrip risk |
 
 ## Architecture
 
@@ -172,11 +177,11 @@ Claude Code / Claude Desktop
 │  └───────────────────┘  │
 │  ┌───────────────────┐  │
 │  │ scratchpad.ts     │──┼── set_note, get_note, list_notes, ...
-│  │ (in-memory Map)   │  │
+│  │ (Map + opt. JSON) │──┼── MCP resources: note://{key}
 │  └───────────────────┘  │
 │  ┌───────────────────┐  │       ┌─────────────────────────────┐
 │  │ python-eval.ts    │──┼──────►│  Docker Container            │
-│  │                   │  │ exec  │  (re-helper-sandbox:latest)  │
+│  │                   │  │ exec  │  (esquie-sandbox:latest)     │
 │  └───────────────────┘  │       │                               │
 │  ┌───────────────────┐  │       │  python3 /opt/runner.py       │
 │  │ sandbox.ts        │──┼──────►│  ├─ loads session from pkl    │
@@ -187,7 +192,7 @@ Claude Code / Claude Desktop
 
 - **Lazy init:** Container is created on the first `python_eval` call and kept alive for the session.
 - **Session persistence:** Python variables survive across calls via `dill` serialization to `/tmp/session.pkl` inside the container.
-- **Auto-expiry:** Container is automatically destroyed after 30 minutes of idle time (configurable via `RE_SANDBOX_IDLE_TIMEOUT`).
+- **Auto-expiry:** Container is automatically destroyed after 30 minutes of idle time (configurable via `ESQUIE_SANDBOX_IDLE_TIMEOUT`).
 - **Cleanup:** Container is stopped and removed on server shutdown (SIGINT/SIGTERM).
 
 ## Configuration
@@ -196,24 +201,28 @@ Resource limits and timeouts are configured via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RE_SANDBOX_MEMORY` | `512` | Memory limit in MB |
-| `RE_SANDBOX_CPUS` | `1` | CPU core count |
-| `RE_SANDBOX_TIMEOUT` | `30000` | Default exec timeout in ms |
-| `RE_SANDBOX_PIDS` | `64` | PID limit |
-| `RE_SANDBOX_IDLE_TIMEOUT` | `1800000` | Auto-expiry idle timeout in ms (30 min) |
+| `ESQUIE_SANDBOX_MEMORY` | `512` | Memory limit in MB (64–8192) |
+| `ESQUIE_SANDBOX_CPUS` | `1` | CPU core count (1–16) |
+| `ESQUIE_SANDBOX_TIMEOUT` | `30000` | Default exec timeout in ms (1000–600000) |
+| `ESQUIE_SANDBOX_PIDS` | `64` | PID limit (8–1024) |
+| `ESQUIE_SANDBOX_IDLE_TIMEOUT` | `1800000` | Auto-expiry idle timeout in ms (60000–86400000, default 30 min) |
+| `ESQUIE_NOTES_FILE` | *(unset)* | Absolute path to a JSON file. When set, scratchpad notes persist across server restarts. |
+
+Out-of-range values are clamped to the nearest bound and a warning is logged to stderr.
 
 Set them in your MCP config's `env` block or export before starting the server:
 
 ```json
 {
   "mcpServers": {
-    "re-helper-tools": {
+    "esquie": {
       "command": "node",
       "args": ["dist/index.js"],
-      "cwd": "/absolute/path/to/re-helper-tools",
+      "cwd": "/absolute/path/to/esquie",
       "env": {
-        "RE_SANDBOX_MEMORY": "1024",
-        "RE_SANDBOX_TIMEOUT": "60000"
+        "ESQUIE_SANDBOX_MEMORY": "1024",
+        "ESQUIE_SANDBOX_TIMEOUT": "60000",
+        "ESQUIE_NOTES_FILE": "/Users/me/.esquie/notes.json"
       }
     }
   }
@@ -230,29 +239,33 @@ npm run dev
 npm run build
 
 # Rebuild the Docker image (required after changing runner.py or Dockerfile)
-docker build -t re-helper-sandbox:latest .
+docker build -t esquie-sandbox:latest .
 
 # Force-recreate the sandbox container (e.g. after image rebuild)
-docker rm -f re-helper-sandbox
+docker rm -f esquie-sandbox
 ```
+
+CI runs `npm ci && npm run build` on every push and PR to `main` (`.github/workflows/build.yml`).
 
 ### Project Structure
 
 ```
-re-helper-tools/
+esquie/
 ├── package.json
 ├── tsconfig.json
 ├── Dockerfile                 # Python sandbox image definition
+├── .github/workflows/
+│   └── build.yml              # CI build check
 ├── src/
-│   ├── index.ts               # Entry point: server setup, tool registration, shutdown
+│   ├── index.ts               # Entry point: server setup, tool/resource registration, shutdown
 │   ├── docker/
 │   │   ├── config.ts          # Env var config parsing
-│   │   ├── sandbox.ts         # DockerSandbox class: container lifecycle + exec
+│   │   ├── sandbox.ts         # DockerSandbox class: container lifecycle + exec + file I/O
 │   │   └── runner.py          # Python runner baked into Docker image
 │   └── tools/
-│       ├── python-eval.ts     # python_eval tool
+│       ├── python-eval.ts     # python_eval, reset_sandbox, upload/list/download
 │       ├── hex-utils.ts       # Native hex/binary/encoding tools
-│       └── scratchpad.ts      # In-memory key-value notepad
+│       └── scratchpad.ts      # Key-value notepad (in-memory + optional JSON persistence)
 └── dist/                      # Compiled output (git-ignored)
 ```
 
@@ -262,12 +275,12 @@ re-helper-tools/
 Docker Desktop or Docker Engine is not running. Start it and try again.
 
 **`python_eval` hangs on first call**
-The sandbox Docker image is being built automatically. This takes 1-2 minutes on first run. Pre-build with `docker build -t re-helper-sandbox:latest .` to avoid this.
+The sandbox Docker image is being built automatically. This takes 1-2 minutes on first run. Pre-build with `docker build -t esquie-sandbox:latest .` to avoid this.
 
-**"Conflict. The container name /re-helper-sandbox is already in use"**
+**"Conflict. The container name /esquie-sandbox is already in use"**
 A leftover container from a previous session. Remove it:
 ```bash
-docker rm -f re-helper-sandbox
+docker rm -f esquie-sandbox
 ```
 
 **Session state is lost**
@@ -279,6 +292,14 @@ The default timeout is 30 seconds. Pass a higher `timeout` value (in ms) for lon
 **Docker image is stale after editing `runner.py`**
 Rebuild the image and remove the old container:
 ```bash
-docker build -t re-helper-sandbox:latest .
+docker build -t esquie-sandbox:latest .
+docker rm -f esquie-sandbox
+```
+
+**Upgrading from `re-helper-tools`**
+Remove the old image and container after upgrading:
+```bash
+docker rmi re-helper-sandbox:latest
 docker rm -f re-helper-sandbox
 ```
+Update any `RE_SANDBOX_*` env vars in your MCP config to `ESQUIE_SANDBOX_*`.
