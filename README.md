@@ -180,15 +180,21 @@ Claude Code / Claude Desktop
 │  │ scratchpad.ts     │──┼── set_note, get_note, list_notes, ...
 │  │ (Map + opt. JSON) │──┼── MCP resources: note://{key}
 │  └───────────────────┘  │
-│  ┌───────────────────┐  │       ┌─────────────────────────────┐
-│  │ python-eval.ts    │──┼──────►│  Docker Container            │
-│  │                   │  │ exec  │  (esquie-sandbox:latest)     │
+│  ┌───────────────────┐  │
+│  │ python-eval.ts    │──┼── python_eval, reset_sandbox,
+│  │ (5 MCP tools)     │  │   upload/list/download_from_sandbox
+│  └─────────┬─────────┘  │
+│            │ calls      │
+│            ▼            │
+│  ┌─────────┴─────────┐  │       ┌───────────────────────────────┐
+│  │ sandbox.ts        │──┼──────►│  Docker Container             │
+│  │ (Docker lifecycle)│  │       │  (esquie-sandbox:latest)      │
 │  └───────────────────┘  │       │                               │
-│  ┌───────────────────┐  │       │  python3 /opt/runner.py       │
-│  │ sandbox.ts        │──┼──────►│  ├─ loads session from pkl    │
-│  │ (Docker lifecycle)│  │       │  ├─ exec(code) in namespace   │
-│  └───────────────────┘  │       │  └─ saves session to pkl      │
-└─────────────────────────┘       └─────────────────────────────┘
+│                         │       │  python3 /opt/runner.py       │
+│                         │       │  ├─ loads session from pkl    │
+│                         │       │  ├─ exec(code) in namespace   │
+│                         │       │  └─ saves session to pkl      │
+└─────────────────────────┘       └───────────────────────────────┘
 ```
 
 - **Lazy init:** Container is created on the first `python_eval` call and kept alive for the session.
