@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0 — 2026-04-29
+
+- Optional read-only host directory mount via `ESQUIE_SANDBOX_MOUNT` env var. When set to an absolute directory path, that directory is bind-mounted at `/mnt/host` inside the sandbox container as read-only. Lets `python_eval` analyze a corpus of files without uploading each one. Path is locked at server start (not LLM-controlled). Invalid paths are logged and skipped — server still starts.
+
 ## 0.3.0 — 2026-04-29
 
 - **Rename:** project renamed from `re-helper-tools` to **Esquie**

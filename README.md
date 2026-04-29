@@ -160,6 +160,7 @@ The `python_eval` container runs with multiple layers of isolation:
 | Output truncation | stdout/stderr capped at 100KB to prevent context flooding |
 | Idle auto-expiry | Container destroyed after 30min of inactivity (configurable) |
 | Upload/download size cap | 10MB per call to bound exfil-via-roundtrip risk |
+| Read-only host mount | When `ESQUIE_SANDBOX_MOUNT` is set, the host directory is mounted at `/mnt/host` with the Docker `:ro` flag — kernel-level read-only. Path is fixed at server start; the LLM cannot select what gets mounted. |
 
 ## Architecture
 
@@ -207,6 +208,7 @@ Resource limits and timeouts are configured via environment variables:
 | `ESQUIE_SANDBOX_PIDS` | `64` | PID limit (8–1024) |
 | `ESQUIE_SANDBOX_IDLE_TIMEOUT` | `1800000` | Auto-expiry idle timeout in ms (60000–86400000, default 30 min) |
 | `ESQUIE_NOTES_FILE` | *(unset)* | Absolute path to a JSON file. When set, scratchpad notes persist across server restarts. |
+| `ESQUIE_SANDBOX_MOUNT` | *(unset)* | Absolute path to a host directory. When set, the directory is bind-mounted **read-only** at `/mnt/host` inside the sandbox container so `python_eval` can analyze its contents without uploading each file. Invalid paths (non-absolute, non-existent, or not a directory) are logged and skipped. |
 
 Out-of-range values are clamped to the nearest bound and a warning is logged to stderr.
 
@@ -222,7 +224,8 @@ Set them in your MCP config's `env` block or export before starting the server:
       "env": {
         "ESQUIE_SANDBOX_MEMORY": "1024",
         "ESQUIE_SANDBOX_TIMEOUT": "60000",
-        "ESQUIE_NOTES_FILE": "/Users/me/.esquie/notes.json"
+        "ESQUIE_NOTES_FILE": "/Users/me/.esquie/notes.json",
+        "ESQUIE_SANDBOX_MOUNT": "/Users/me/samples"
       }
     }
   }

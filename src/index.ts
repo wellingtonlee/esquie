@@ -16,7 +16,7 @@ const sandbox = new DockerSandbox(config);
 
 const server = new McpServer({
   name: "esquie",
-  version: "0.3.0",
+  version: "0.4.0",
 });
 
 registerHexUtilsTools(server);

@@ -36,10 +36,13 @@ Scratchpad notes are exposed as MCP resources under `note://{key}`. The scratchp
 - Auto-expires after idle timeout (default 30min, configurable via `ESQUIE_SANDBOX_IDLE_TIMEOUT`)
 - Destroyed on SIGINT/SIGTERM
 - Image tag: `esquie-sandbox:latest`, container name: `esquie-sandbox`
+- Optional read-only host mount at `/mnt/host` when `ESQUIE_SANDBOX_MOUNT` is set (absolute path to a host directory). Path validated at startup (must be absolute, exist, be a directory); resolved via `realpathSync`. Invalid → warn + skip, server still starts. Bound via Docker `:ro` flag (kernel-level read-only). Path is fixed at server start — not LLM-controllable.
 
 ## Configuration
 
 Resource limits configurable via env vars: `ESQUIE_SANDBOX_MEMORY`, `ESQUIE_SANDBOX_CPUS`, `ESQUIE_SANDBOX_TIMEOUT`, `ESQUIE_SANDBOX_PIDS`, `ESQUIE_SANDBOX_IDLE_TIMEOUT`. Defaults in `src/docker/config.ts`.
+
+Optional read-only host mount: `ESQUIE_SANDBOX_MOUNT=/abs/path/to/dir` bind-mounts the directory at `/mnt/host` inside the container as read-only. Validation in `envHostMountDir()` (`src/docker/config.ts`): absolute, exists, is a directory. Bind added in `HostConfig.Binds` in `src/docker/sandbox.ts`. Stacks on existing `ReadonlyRootfs`, `CapDrop ALL`, `NetworkMode none`, non-root user.
 
 Optional persistence: `ESQUIE_NOTES_FILE=/path/to/notes.json` makes the scratchpad write through to disk so notes survive server restarts. Atomic write via `<file>.tmp` rename. Errors fall back to in-memory.
 

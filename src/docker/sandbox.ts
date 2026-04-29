@@ -115,6 +115,9 @@ export class DockerSandbox {
         PidsLimit: this.config.pidsLimit,
         CapDrop: ["ALL"],
         ShmSize: 1024 * 1024, // 1MB
+        Binds: this.config.hostMountPath
+          ? [`${this.config.hostMountPath}:/mnt/host:ro`]
+          : undefined,
       },
     });
 
